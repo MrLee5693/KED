@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import json
 import os
 import ast
 from tqdm import tqdm
@@ -121,9 +122,8 @@ class Item2Vec:
 
 
     def get_result(self, c2v_model,i2v_model, item_dic, val_df, topk, size, class_name):
-        answers = pd.DataFrame(columns = ["KEDCD","Keyword"])
         for n, q in tqdm(val_df.iterrows(), total = len(val_df),desc="First loop"):
-              
+              ans_dic = {}
               most_id = [x[0] for x in c2v_model.most_similar(q['KEDCD'], topn=300) if x[0] in self.item_dic.keys()][:topk]
               get_item = []
               for ID in tqdm(most_id,desc="Second loop"):
@@ -131,13 +131,13 @@ class Item2Vec:
               id_v = id_vector(get_item,size,i2v_model)
               result = i2v_model.most_similar(positive=[id_v], topn=50)
               result = [r[0] for r in result if r[0] in self.code]
-              answers = answers.append(pd.DataFrame({
-                  "KEDCD": q["KEDCD"],
-                  "Keyword":get_item[:5]
-              }))
+              ans_dic[q["KEDCD"]] = result[:5]
 
-        display(answers)
-        answers.to_csv(f"{size}dim_{class_name}_val.csv", index=False)
+        print(ans_dic)
+        with open(f"{size}dim_{class_name}_val.json", "w") as json_file:
+            json.dump(ans_dic, json_file)
+
+
     def model_train(self,size,class_name):
         self.load_raw(class_name)
         self.get_train_dic(self.pre_data)
@@ -149,7 +149,6 @@ class Item2Vec:
         self.get_i2v(total=self.total, min_count=self.min_count, size=size,class_name=class_name, window=self.window, sg=self.sg,trained=True)
         self.update_c2v(self.train_data,self.pre_val, self.i2v_model)
         self.get_result(self.c2v_model, self.i2v_model, self.item_dic, self.pre_val, topk, size, class_name)
-        
 if __name__ == "__main__":
     I2V = Item2Vec(FILE_PATH)
     I2V.model_train(128,class_name)
