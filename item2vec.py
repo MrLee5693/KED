@@ -1,3 +1,5 @@
+﻿
+
 import pandas as pd
 import numpy as np
 import json
@@ -7,20 +9,37 @@ from tqdm import tqdm
 import time
 from gensim.models import Word2Vec
 from gensim.models.keyedvectors import WordEmbeddingsKeyedVectors
+from gensim.models.callbacks import CallbackAny2Vec
 from gensim.models import KeyedVectors
 import warnings
 warnings.filterwarnings("ignore")
+
+class LossLogger(CallbackAny2Vec):
+    '''Output loss at each epoch'''
+    def __init__(self):
+        self.epoch = 1
+        self.losses = []
+
+    def on_epoch_begin(self, model):
+        print(f'Epoch: {self.epoch}', end='\t')
+
+    def on_epoch_end(self, model):
+        loss = model.get_latest_training_loss()
+        self.losses.append(loss)
+        print(f'  Loss: {loss}')
+        self.epoch += 1
+
 
 class Item2Vec:
     def __init__(self, FILE_PATH):
         self.FILE_PATH = FILE_PATH
         self.min_count = 5
         self.size = 128
-        self.window = 50
+        self.window = 100000
         self.sg = 1
-        self.negative = 5
+        self.negative = 15
         self.c2v_model = WordEmbeddingsKeyedVectors(self.size)
-        
+        self.loss_logger = LossLogger()
 
     def load_raw(self,class_name):
         print(f"Loading Raw...{class_name}")
@@ -86,8 +105,8 @@ class Item2Vec:
         else:
             print(f"Item2Vec Training ...{size}dim")
             start = time.time()
-            i2v_model = Word2Vec(sentences = total, min_count = min_count, size = size, window = window, sg = sg, negative = negative)
-            i2v_model.train(total, total_examples=len(total), epochs=10)
+            i2v_model = Word2Vec(sentences = total, min_count = min_count, size = size, window = window, sg = sg, negative = negative, callbacks = [self.loss_logger], compute_loss = True)
+            i2v_model.train(total, total_examples=len(total), epochs=20)
             i2v_model.wv.save_word2vec_format(f"item2vec_{size}dim_{class_name}_negative{negative}")
             end = time.time()
             print("Training Time is {} Seconds ...".format(round(end-start,2)))
@@ -149,8 +168,3 @@ class Item2Vec:
         self.get_i2v(total=self.total, min_count=self.min_count, size=size,class_name=class_name, window=self.window, sg=self.sg,trained=True)
         self.update_c2v(self.train_data,self.pre_val, self.i2v_model)
         self.get_result(self.c2v_model, self.i2v_model, self.item_dic, self.pre_val, topk, size, class_name)
-if __name__ == "__main__":
-    I2V = Item2Vec(FILE_PATH)
-    I2V.model_train(128,class_name)
-    
-
