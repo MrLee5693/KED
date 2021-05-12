@@ -1,5 +1,3 @@
-﻿
-
 import pandas as pd
 import numpy as np
 import json
@@ -8,9 +6,12 @@ import ast
 from tqdm import tqdm
 import time
 from gensim.models import Word2Vec
-from gensim.models.keyedvectors import WordEmbeddingsKeyedVectors
+from gensim.models.keyedvectors import Word2VecKeyedVectors
 from gensim.models.callbacks import CallbackAny2Vec
+from gensim import utils
+from numpy import zeros, dtype, float32 as REAL, ascontiguousarray, fromstring
 from gensim.models import KeyedVectors
+from gensim import utils
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -34,11 +35,11 @@ class Item2Vec:
     def __init__(self, FILE_PATH):
         self.FILE_PATH = FILE_PATH
         self.min_count = 5
-        self.size = 128
+        self.size = 256
         self.window = 100000
         self.sg = 1
         self.negative = 15
-        self.c2v_model = WordEmbeddingsKeyedVectors(self.size)
+        
         self.loss_logger = LossLogger()
 
     def load_raw(self,class_name):
@@ -67,12 +68,15 @@ class Item2Vec:
         print("Data Loading...")
         train = pd.read_csv("train_stop_okt.csv")
         val = pd.read_csv("val_stop_okt.csv")
+        tst = pd.read_csv("test_stop_okt.csv")
         tqdm.pandas()
         
         train["Keyword"] = train["Keyword"].progress_apply(lambda x : ast.literal_eval(x))
         val["Keyword"] = val["Keyword"].progress_apply(lambda x : ast.literal_eval(x))
+        tst["Keyword"] = tst["Keyword"].progress_apply(lambda x : ast.literal_eval(x))
         self.pre_data = train
         self.pre_val = val
+        self.pre_tst = tst
 
     def get_train_dic(self, data):
         item_dic = {}
@@ -86,10 +90,10 @@ class Item2Vec:
         self.total = total
 
 
-    def get_dic(self, train,val):
+    def get_dic(self, train,val,tst):
         item_dic = {}
         total = []
-        data = pd.concat([train,val])
+        data = pd.concat([train,val,tst])
         print("Get Dictionary...")
         for i,q in tqdm(data.iterrows(), total=data.shape[0]):
             item_dic[str(q['KEDCD'])] = q['Keyword']
@@ -106,26 +110,73 @@ class Item2Vec:
             print(f"Item2Vec Training ...{size}dim")
             start = time.time()
             i2v_model = Word2Vec(sentences = total, min_count = min_count, size = size, window = window, sg = sg, negative = negative, callbacks = [self.loss_logger], compute_loss = True)
-            i2v_model.train(total, total_examples=len(total), epochs=20)
+            i2v_model.train(total, total_examples=len(total), epochs=5)
             i2v_model.wv.save_word2vec_format(f"item2vec_{size}dim_{class_name}_negative{negative}")
             end = time.time()
             print("Training Time is {} Seconds ...".format(round(end-start,2)))
         self.i2v_model = i2v_model
  
-    def update_c2v(self, train,val, i2v_model):
+    def update_c2v(self, train,val,tst, i2v_model,size):
         ID = []   
         vec = []
-        data = pd.concat([train,val])
-        tqdm.pandas()
-        print("Get ID Vector ...")
-        data["ID_Vector"] = data["Keyword"].progress_apply(lambda item : self.id_vector(item,self.size,self.i2v_model))
-        print("Update ID Vector ...")
-        if os.path.isfile(f"vec_{self.size}dim_{self.class_name}_negative{self.negative}") == False:
-          for i,q in tqdm(data.iterrows(), total=data.shape[0]):
-            self.c2v_model.add(entities=str(q["KEDCD"]), weights=q["ID_Vector"])
-          
+        data = pd.concat([train,val,tst])
+   
+        self.c2v_model = Word2VecKeyedVectors(vector_size=size)
+        
+
+        if os.path.isfile(f"vec_{self.size}dim_{self.class_name}_negative{self.negative}.bin") == False:
+            print("Get ID Vector ...")
+            data["ID_Vector"] = data["Keyword"].progress_apply(lambda item : self.id_vector(item,self.size,self.i2v_model))
+            print("Update ID Vector ...")
+            ked_dict = {}
+            for i,q in tqdm(data.iterrows(), total=data.shape[0]):
+                ked_dict[str(q["KEDCD"])] = q["ID_Vector"]
+        
+            self.c2v_model.vocab = ked_dict
+            self.c2v_model.vectors = np.array(list(ked_dict.values()))
+            self.my_save_word2vec_format(binary=True, fname=f"vec_{self.size}dim_{self.class_name}_negative{self.negative}.bin", total_vec=len(ked_dict), vocab=self.c2v_model.vocab, vectors=self.c2v_model.vectors)
+
         else:
-            self.c2v_model = WordEmbeddingsKeyedVectors().load_word2vec_format(f"vec_{self.size}dim_{self.class_name}_negative{self.negative}")
+            print("Cor2Vec is Already Trained")
+            self.c2v_model = Word2VecKeyedVectors(vector_size=size).load_word2vec_format(f"vec_{self.size}dim_{self.class_name}_negative{self.negative}.bin",binary=True)
+
+
+    @staticmethod
+    def my_save_word2vec_format(fname, vocab, vectors, binary=True, total_vec=2):
+        """Store the input-hidden weight matrix in the same format used by the original
+        C word2vec-tool, for compatibility.
+
+        Parameters
+        ----------
+        fname : str
+            The file path used to save the vectors in.
+        vocab : dict
+            The vocabulary of words.
+        vectors : numpy.array
+            The vectors to be stored.
+        binary : bool, optional
+            If True, the data wil be saved in binary word2vec format, else it will be saved in plain text.
+        total_vec : int, optional
+            Explicitly specify total number of vectors
+            (in case word vectors are appended with document vectors afterwards).
+
+        """
+        if not (vocab or vectors):
+            raise RuntimeError("no input")
+        if total_vec is None:
+            total_vec = len(vocab)
+        vector_size = vectors.shape[1]
+        assert (len(vocab), vector_size) == vectors.shape
+        with utils.smart_open(fname, 'wb') as fout:
+            print(total_vec, vector_size)
+            fout.write(utils.to_utf8("%s %s\n" % (total_vec, vector_size)))
+            # store in sorted order: most frequent words at the top
+            for word, row in vocab.items():
+                if binary:
+                    row = row.astype(REAL)
+                    fout.write(utils.to_utf8(word) + b" " + row.tostring())
+                else:
+                    fout.write(utils.to_utf8("%s %s\n" % (word, ' '.join(repr(val) for val in row))))
 
     @staticmethod
     def id_vector(items,size,model):
@@ -135,19 +186,24 @@ class Item2Vec:
               temp += model.wv.get_vector(item)
             except:
               pass
-            
         return temp
     
 
 
     def get_result(self, c2v_model,i2v_model, item_dic, val_df, topk, size, class_name):
-        for n, q in tqdm(val_df.iterrows(), total = len(val_df),desc="First loop"):
+        print("Get Result...") 
+        for n, q in tqdm(val_df.iterrows(), total = len(val_df),desc="Test loop"):
+              
               ans_dic = {}
-              most_id = [x[0] for x in c2v_model.most_similar(q['KEDCD'], topn=300) if x[0] in self.item_dic.keys()][:topk]
+              
+              similar_id = c2v_model.most_similar(str(q['KEDCD']), topn=300)
+              
+              most_id = [x[0] for x in similar_id][:topk]
+              
               get_item = []
-              for ID in tqdm(most_id,desc="Second loop"):
+              for ID in most_id:
                   get_item += item_dic[ID]
-              id_v = id_vector(get_item,size,i2v_model)
+              id_v = self.id_vector(get_item,size,i2v_model)
               result = i2v_model.most_similar(positive=[id_v], topn=50)
               result = [r[0] for r in result if r[0] in self.code]
               ans_dic[q["KEDCD"]] = result[:5]
@@ -164,7 +220,7 @@ class Item2Vec:
     
     def run(self,size,class_name,topk):
         self.load_raw(class_name)
-        self.get_dic(self.train_data,self.pre_val)
-        self.get_i2v(total=self.total, min_count=self.min_count, size=size,class_name=class_name, window=self.window, sg=self.sg,trained=True)
-        self.update_c2v(self.train_data,self.pre_val, self.i2v_model)
-        self.get_result(self.c2v_model, self.i2v_model, self.item_dic, self.pre_val, topk, size, class_name)
+        self.get_dic(self.train_data,self.pre_val,self.pre_tst)
+        self.get_i2v(total=self.total, min_count=self.min_count, size=size,class_name=class_name, negative=self.negative,window=self.window, sg=self.sg,trained=True)
+        self.update_c2v(self.train_data,self.pre_val,self.pre_tst, self.i2v_model,size)
+        self.get_result(c2v_model=self.c2v_model, i2v_model=self.i2v_model, item_dic=self.item_dic, val_df=self.pre_val, topk=topk, size=size, class_name=class_name)
