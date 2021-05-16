@@ -32,10 +32,10 @@ class LossLogger(CallbackAny2Vec):
 
 
 class Item2Vec:
-    def __init__(self, FILE_PATH):
+    def __init__(self, size, FILE_PATH):
         self.FILE_PATH = FILE_PATH
         self.min_count = 5
-        self.size = 256
+        self.size = size
         self.window = 100000
         self.sg = 1
         self.negative = 15
@@ -116,15 +116,13 @@ class Item2Vec:
             print("Training Time is {} Seconds ...".format(round(end-start,2)))
         self.i2v_model = i2v_model
  
-    def update_c2v(self, train,val,tst, i2v_model,size):
+    def get_c2v(self, train,val,tst, i2v_model,size,trained):
         ID = []   
         vec = []
         data = pd.concat([train,val,tst])
-   
         self.c2v_model = Word2VecKeyedVectors(vector_size=size)
         
-
-        if os.path.isfile(f"vec_{self.size}dim_{self.class_name}_negative{self.negative}.bin") == False:
+        if trained == False:
             print("Get ID Vector ...")
             data["ID_Vector"] = data["Keyword"].progress_apply(lambda item : self.id_vector(item,self.size,self.i2v_model))
             print("Update ID Vector ...")
@@ -139,7 +137,6 @@ class Item2Vec:
         else:
             print("Cor2Vec is Already Trained")
             self.c2v_model = Word2VecKeyedVectors(vector_size=size).load_word2vec_format(f"vec_{self.size}dim_{self.class_name}_negative{self.negative}.bin",binary=True)
-
 
     @staticmethod
     def my_save_word2vec_format(fname, vocab, vectors, binary=True, total_vec=2):
@@ -192,35 +189,41 @@ class Item2Vec:
 
     def get_result(self, c2v_model,i2v_model, item_dic, val_df, topk, size, class_name):
         print("Get Result...") 
+        ans_dic = {}
         for n, q in tqdm(val_df.iterrows(), total = len(val_df),desc="Test loop"):
+              similar_id = c2v_model.most_similar(str(q['KEDCD']), topn=topk)
+              most_id = [x[0] for x in similar_id]
               
-              ans_dic = {}
-              
-              similar_id = c2v_model.most_similar(str(q['KEDCD']), topn=300)
-              
-              most_id = [x[0] for x in similar_id][:topk]
-              
-              get_item = []
+              results = []
               for ID in most_id:
-                  get_item += item_dic[ID]
-              id_v = self.id_vector(get_item,size,i2v_model)
-              result = i2v_model.most_similar(positive=[id_v], topn=50)
-              result = [r[0] for r in result if r[0] in self.code]
-              ans_dic[q["KEDCD"]] = result[:5]
+                id_v = self.c2v_model[ID]
+                result = i2v_model.most_similar(positive=[id_v], topn=1500)
+                result = [r[0] for r in result if r[0] in self.code][:5]
+                results.append(result)
+              results = pd.DataFrame(results).mode()
+              results = results.values.tolist()
+              ans_dic[q["KEDCD"]] = results
 
-        print(ans_dic)
-        with open(f"{size}dim_{class_name}_val.json", "w") as json_file:
+        
+        with open(f"{size}dim_{class_name}_val_{topk}nn1.json", "w") as json_file:
             json.dump(ans_dic, json_file)
 
 
-    def model_train(self,size,class_name):
+    def i2v_model_train(self,class_name):
         self.load_raw(class_name)
         self.get_train_dic(self.pre_data)
-        self.get_i2v(total=self.total, min_count=self.min_count, size=size, window=self.window, sg=self.sg,negative=self.negative,class_name=class_name,trained=False)
+        self.get_i2v(total=self.total, min_count=self.min_count, size=self.size, window=self.window, sg=self.sg,negative=self.negative,class_name=class_name,trained=False)
     
-    def run(self,size,class_name,topk):
+    def c2v_model_train(self,class_name,topk):
         self.load_raw(class_name)
         self.get_dic(self.train_data,self.pre_val,self.pre_tst)
-        self.get_i2v(total=self.total, min_count=self.min_count, size=size,class_name=class_name, negative=self.negative,window=self.window, sg=self.sg,trained=True)
-        self.update_c2v(self.train_data,self.pre_val,self.pre_tst, self.i2v_model,size)
-        self.get_result(c2v_model=self.c2v_model, i2v_model=self.i2v_model, item_dic=self.item_dic, val_df=self.pre_val, topk=topk, size=size, class_name=class_name)
+        self.get_i2v(total=self.total, min_count=self.min_count, size=self.size,class_name=class_name, negative=self.negative,window=self.window, sg=self.sg,trained=True)
+        self.get_c2v(self.train_data,self.pre_val,self.pre_tst, self.i2v_model,size,trained=False)
+    
+    def run(self,class_name,topk):
+        self.load_raw(class_name)
+        self.get_dic(self.train_data,self.pre_val,self.pre_tst)
+        self.get_i2v(total=self.total, min_count=self.min_count, size=self.size,class_name=class_name, negative=self.negative,window=self.window, sg=self.sg,trained=True)
+        self.get_c2v(self.train_data,self.pre_val,self.pre_tst, self.i2v_model,self.size,trained=True)
+        self.get_result(c2v_model=self.c2v_model, i2v_model=self.i2v_model, item_dic=self.item_dic, val_df=self.pre_val, topk=topk, size=self.size, class_name=class_name)
+
