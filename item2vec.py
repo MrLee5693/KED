@@ -170,7 +170,7 @@ class Item2Vec:
                   for ID in most_id:
                     id_v = self.c2v_model[ID]
                     
-                    result = i2v_model.most_similar(positive=[id_v], topn=2000)
+                    result = i2v_model.most_similar(positive=[id_v], topn=1000)
                     result_add = [r[0] for r in result if r[0] in self.code]
                     #result_code = [r[0] for r in result if r[0] in self.code][:1000]
                     
@@ -193,7 +193,7 @@ class Item2Vec:
                     id_v = self.c2v_model[ID]
 
                     #print(n, id_v)
-                    result = i2v_model.most_similar(positive=[id_v], topn=2000)
+                    result = i2v_model.most_similar(positive=[id_v], topn=1000)
                     #print(n,result)
                     result_add = [r[0] for r in result if r[0] in self.code]
                     
