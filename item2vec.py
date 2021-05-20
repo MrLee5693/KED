@@ -32,8 +32,9 @@ class LossLogger(CallbackAny2Vec):
 
 
 class Item2Vec:
-    def __init__(self, size, FILE_PATH):
+    def __init__(self,name, size, FILE_PATH):
         self.FILE_PATH = FILE_PATH
+        self.name = name
         self.min_count = 5
         self.size = size
         self.window = 100000
@@ -45,16 +46,24 @@ class Item2Vec:
     def load_raw(self,class_name):
         print(f"Loading Raw...{class_name}")
         self.class_name = class_name
-        raw_data = pd.read_csv("train.txt",sep="",encoding="cp949")
-        raw_data = raw_data[raw_data["KSIC10_BZC_CD"].isnull() == False]
-        raw_data["KEDCD"] = raw_data["KEDCD"].astype(int)
-        raw_data["대분류"] = raw_data["KSIC10_BZC_CD"].apply(lambda x : x[0])
-        raw_data["중분류"] = raw_data["KSIC10_BZC_CD"].apply(lambda x : x[:3])
-        raw_data["소분류"] = raw_data["KSIC10_BZC_CD"].apply(lambda x : x[:4])
-        raw_data["세분류"] = raw_data["KSIC10_BZC_CD"].apply(lambda x : x[:5])
-        raw_data["세세분류"] = raw_data["KSIC10_BZC_CD"].apply(lambda x : x[:6])
-        code = raw_data[["KEDCD",class_name]].drop_duplicates(["KEDCD",class_name], keep='first').sort_values("KEDCD").reset_index(drop=True)
+
+        if os.path.isfile("code.csv"):
+            code = pd.read_csv("code.csv")
+            code = code[["KEDCD",self.class_name]]
+        else:
+            raw_data = pd.read_csv("train.txt",sep="",encoding="cp949")
+            raw_data = raw_data[raw_data["KSIC10_BZC_CD"].isnull() == False]
+            raw_data["KEDCD"] = raw_data["KEDCD"].astype(int)
+            raw_data["대분류"] = raw_data["KSIC10_BZC_CD"].apply(lambda x : x[0])
+            raw_data["중분류"] = raw_data["KSIC10_BZC_CD"].apply(lambda x : x[:3])
+            raw_data["소분류"] = raw_data["KSIC10_BZC_CD"].apply(lambda x : x[:4])
+            raw_data["세분류"] = raw_data["KSIC10_BZC_CD"].apply(lambda x : x[:5])
+            raw_data["세세분류"] = raw_data["KSIC10_BZC_CD"].apply(lambda x : x[:6])
+            code = raw_data[["KEDCD",class_name]].drop_duplicates(["KEDCD",class_name], keep='first').sort_values("KEDCD").reset_index(drop=True)
+            code.to_csv("code.csv",index=False)
         self.load_data()
+        self.ked_name = set(self.pre_data["KEDCD"].astype(str))
+        self.code_data = code[code["KEDCD"].isin(self.ked_name)]
         pre_train = pd.merge(self.pre_data,code,how="left",on="KEDCD")
         pre_train.apply(lambda x : x["Keyword"].append(x[class_name]),axis=1)
         pre_train = pre_train[["KEDCD","Keyword"]]
@@ -66,17 +75,20 @@ class Item2Vec:
 
     def load_data(self):
         print("Data Loading...")
-        train = pd.read_csv("train_stop_okt.csv")
-        val = pd.read_csv("val_stop_okt.csv")
-        tst = pd.read_csv("test_stop_okt.csv")
         tqdm.pandas()
+        train = pd.read_csv("train_stop_okt.csv")
+        if self.name == "val":
+            test = pd.read_csv("val_stop_okt.csv")
+            test["Keyword"] = test["Keyword"].progress_apply(lambda x : ast.literal_eval(x))
+            self.pre_test = test
+        elif self.name == "test":
+            test = pd.read_csv("test_stop_okt.csv")
+            test["Keyword"] = test["Keyword"].progress_apply(lambda x : ast.literal_eval(x))
+            self.pre_test = test
         
         train["Keyword"] = train["Keyword"].progress_apply(lambda x : ast.literal_eval(x))
-        val["Keyword"] = val["Keyword"].progress_apply(lambda x : ast.literal_eval(x))
-        tst["Keyword"] = tst["Keyword"].progress_apply(lambda x : ast.literal_eval(x))
         self.pre_data = train
-        self.pre_val = val
-        self.pre_tst = tst
+
 
     def get_train_dic(self, data):
         item_dic = {}
@@ -90,10 +102,10 @@ class Item2Vec:
         self.total = total
 
 
-    def get_dic(self, train,val,tst):
+    def get_dic(self, train,test):
         item_dic = {}
         total = []
-        data = pd.concat([train,val,tst])
+        data = pd.concat([train,test])
         print("Get Dictionary...")
         for i,q in tqdm(data.iterrows(), total=data.shape[0]):
             item_dic[str(q['KEDCD'])] = q['Keyword']
@@ -116,10 +128,10 @@ class Item2Vec:
             print("Training Time is {} Seconds ...".format(round(end-start,2)))
         self.i2v_model = i2v_model
  
-    def get_c2v(self, train,val,tst, i2v_model,size,trained):
+    def get_c2v(self, train,test, i2v_model,size,trained):
         ID = []   
         vec = []
-        data = pd.concat([train,val,tst])
+        data = pd.concat([train,test])
         self.c2v_model = Word2VecKeyedVectors(vector_size=size)
         
         if trained == False:
@@ -137,6 +149,80 @@ class Item2Vec:
         else:
             print("Cor2Vec is Already Trained")
             self.c2v_model = Word2VecKeyedVectors(vector_size=size).load_word2vec_format(f"vec_{self.size}dim_{self.class_name}_negative{self.negative}.bin",binary=True)
+
+    def get_result(self, c2v_model,i2v_model, item_dic, test, topk, size, class_name,keyword):
+        print("Get Result...") 
+        ans_dic = {}
+        label = self.code_data
+        label["KEDCD"] = label["KEDCD"].astype(str)
+       
+        for n, q in tqdm(test.iterrows(), total = len(test),desc="Test loop"):
+              ans_dic[q["KEDCD"]] = {}
+              similar_id = c2v_model.most_similar(str(q['KEDCD']), topn=3000)
+              #print(n,similar_id[:100])
+              most_id = [x[0] for x in similar_id if x[0] in self.ked_name][:topk]
+              #print(n,most_id)
+              #print(most_id)
+              if keyword:
+                  get_items = []
+                  results = []
+                  result_adds = []
+                  for ID in most_id:
+                    id_v = self.c2v_model[ID]
+                    
+                    result = i2v_model.most_similar(positive=[id_v], topn=2000)
+                    result_add = [r[0] for r in result if r[0] in self.code]
+                    #result_code = [r[0] for r in result if r[0] in self.code][:1000]
+                    
+                    result_code = label[label["KEDCD"] == ID][self.class_name].values[0]
+                    results.append(result_code)
+              
+                 
+                    
+                    get_item = [r[0] for r in result if r[0] not in self.code][:1000]
+                    get_items.append(get_item)
+
+
+                    result_adds.append(result_add)
+              else:
+                  results = []
+                  result_adds = []
+                  for ID in most_id:
+                    result_code = label[label["KEDCD"] == ID][self.class_name].values[0]
+   
+                    id_v = self.c2v_model[ID]
+
+                    #print(n, id_v)
+                    result = i2v_model.most_similar(positive=[id_v], topn=2000)
+                    #print(n,result)
+                    result_add = [r[0] for r in result if r[0] in self.code]
+                    
+                    results.append(result_code)
+                    result_adds.append(result_add[:100])
+                    #print(n, result_add[:100])
+
+              if keyword:
+                  results = pd.DataFrame(results).mode().T[0].drop_duplicates().T.values.tolist()[:100]
+                  result_adds = pd.DataFrame(result_adds).mode().T[0].drop_duplicates().T.values.tolist()[:100]
+                  get_items = pd.DataFrame(get_items).mode().T[0].drop_duplicates().T.values.tolist()[:100]
+                  ans_dic[q["KEDCD"]]["Result"] = results
+                  ans_dic[q["KEDCD"]]["Keyword"] = get_items
+                  ans_dic[q["KEDCD"]]["Results"] = result_adds
+              else:
+                  results = pd.DataFrame(results).mode().T[0].drop_duplicates().T.values.tolist()[:100]
+                  result_adds = pd.DataFrame(result_adds).mode().T[0].drop_duplicates().T.values.tolist()[:100]
+                  ans_dic[q["KEDCD"]]["Result"] = results
+                  ans_dic[q["KEDCD"]]["Results"] = result_adds
+  
+
+     
+              #display(ans_dic)
+        with open(f"{size}dim_{class_name}_{self.name}_{topk}nn1.json", "w") as json_file:
+            json.dump(ans_dic, json_file)
+
+
+
+
 
     @staticmethod
     def my_save_word2vec_format(fname, vocab, vectors, binary=True, total_vec=2):
@@ -185,45 +271,24 @@ class Item2Vec:
               pass
         return temp
     
-
-
-    def get_result(self, c2v_model,i2v_model, item_dic, val_df, topk, size, class_name):
-        print("Get Result...") 
-        ans_dic = {}
-        for n, q in tqdm(val_df.iterrows(), total = len(val_df),desc="Test loop"):
-              similar_id = c2v_model.most_similar(str(q['KEDCD']), topn=topk)
-              most_id = [x[0] for x in similar_id]
-              
-              results = []
-              for ID in most_id:
-                id_v = self.c2v_model[ID]
-                result = i2v_model.most_similar(positive=[id_v], topn=1500)
-                result = [r[0] for r in result if r[0] in self.code][:5]
-                results.append(result)
-              results = pd.DataFrame(results).mode()
-              results = results.values.tolist()
-              ans_dic[q["KEDCD"]] = results
-
-        
-        with open(f"{size}dim_{class_name}_val_{topk}nn1.json", "w") as json_file:
-            json.dump(ans_dic, json_file)
-
-
     def i2v_model_train(self,class_name):
         self.load_raw(class_name)
         self.get_train_dic(self.pre_data)
         self.get_i2v(total=self.total, min_count=self.min_count, size=self.size, window=self.window, sg=self.sg,negative=self.negative,class_name=class_name,trained=False)
     
-    def c2v_model_train(self,class_name,topk):
+    def c2v_model_train(self,class_name):
         self.load_raw(class_name)
-        self.get_dic(self.train_data,self.pre_val,self.pre_tst)
+        self.get_dic(self.train_data,self.pre_test)
         self.get_i2v(total=self.total, min_count=self.min_count, size=self.size,class_name=class_name, negative=self.negative,window=self.window, sg=self.sg,trained=True)
-        self.get_c2v(self.train_data,self.pre_val,self.pre_tst, self.i2v_model,size,trained=False)
-    
+        self.get_c2v(self.train_data,self.pre_test, self.i2v_model,self.size,trained=False)
+
     def run(self,class_name,topk):
         self.load_raw(class_name)
-        self.get_dic(self.train_data,self.pre_val,self.pre_tst)
+        self.get_dic(self.train_data,self.pre_test)
         self.get_i2v(total=self.total, min_count=self.min_count, size=self.size,class_name=class_name, negative=self.negative,window=self.window, sg=self.sg,trained=True)
-        self.get_c2v(self.train_data,self.pre_val,self.pre_tst, self.i2v_model,self.size,trained=True)
-        self.get_result(c2v_model=self.c2v_model, i2v_model=self.i2v_model, item_dic=self.item_dic, val_df=self.pre_val, topk=topk, size=self.size, class_name=class_name)
-
+        self.get_c2v(self.train_data,self.pre_test, self.i2v_model,self.size,trained=True)
+        self.get_result(c2v_model=self.c2v_model, i2v_model=self.i2v_model, item_dic=self.item_dic, test=self.pre_test, topk=topk, size=self.size, class_name=class_name,keyword=False)
+if __name__ == "__main__":
+    FILE_PATH = './'
+    I2V = Item2Vec("val",64,FILE_PATH)
+    I2V.run(class_name="세세분류",topk=5)
