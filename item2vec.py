@@ -79,6 +79,8 @@ class Item2Vec:
         train = pd.read_csv("train_stop_okt.csv")
         if self.name == "val":
             test = pd.read_csv("val_stop_okt.csv")
+            test_index = test.index[:10000]
+            test = test.iloc[test_index,:]
             test["Keyword"] = test["Keyword"].progress_apply(lambda x : ast.literal_eval(x))
             self.pre_test = test
         elif self.name == "test":
@@ -158,65 +160,50 @@ class Item2Vec:
        
         for n, q in tqdm(test.iterrows(), total = len(test),desc="Test loop"):
               ans_dic[q["KEDCD"]] = {}
-              similar_id = c2v_model.most_similar(str(q['KEDCD']), topn=3000)
-              #print(n,similar_id[:100])
-              most_id = [x[0] for x in similar_id if x[0] in self.ked_name][:topk]
-              #print(n,most_id)
-              #print(most_id)
+              similar_id = c2v_model.most_similar(str(q['KEDCD']), topn=2000)
+              if len(similar_id) > topk:
+                  most_id = [x[0] for x in similar_id if x[0] in self.ked_name][:topk]
+              else:
+                  similar_id = c2v_model.most_similar(str(q['KEDCD']), topn=10000)
+                  most_id = [x[0] for x in similar_id if x[0] in self.ked_name][:topk]
+ 
               if keyword:
                   get_items = []
                   results = []
                   result_adds = []
                   for ID in most_id:
                     id_v = self.c2v_model[ID]
-                    
-                    result = i2v_model.most_similar(positive=[id_v], topn=1000)
+                    result = i2v_model.most_similar(positive=[id_v], topn=500)
                     result_add = [r[0] for r in result if r[0] in self.code]
-                    #result_code = [r[0] for r in result if r[0] in self.code][:1000]
-                    
                     result_code = label[label["KEDCD"] == ID][self.class_name].values[0]
                     results.append(result_code)
-              
-                 
-                    
-                    get_item = [r[0] for r in result if r[0] not in self.code][:1000]
+                    get_item = [r[0] for r in result if r[0] not in self.code][:100]
                     get_items.append(get_item)
-
-
                     result_adds.append(result_add)
               else:
                   results = []
                   result_adds = []
                   for ID in most_id:
                     result_code = label[label["KEDCD"] == ID][self.class_name].values[0]
-   
                     id_v = self.c2v_model[ID]
-
-                    #print(n, id_v)
-                    result = i2v_model.most_similar(positive=[id_v], topn=1000)
-                    #print(n,result)
+                    result = i2v_model.most_similar(positive=[id_v], topn=500)
                     result_add = [r[0] for r in result if r[0] in self.code]
-                    
                     results.append(result_code)
                     result_adds.append(result_add[:100])
-                    #print(n, result_add[:100])
 
               if keyword:
-                  results = pd.DataFrame(results).mode().T[0].drop_duplicates().T.values.tolist()[:100]
+                  results = pd.DataFrame(results).mode().T[0].drop_duplicates().T.values.tolist()
                   result_adds = pd.DataFrame(result_adds).mode().T[0].drop_duplicates().T.values.tolist()[:100]
                   get_items = pd.DataFrame(get_items).mode().T[0].drop_duplicates().T.values.tolist()[:100]
                   ans_dic[q["KEDCD"]]["Result"] = results
                   ans_dic[q["KEDCD"]]["Keyword"] = get_items
                   ans_dic[q["KEDCD"]]["Results"] = result_adds
               else:
-                  results = pd.DataFrame(results).mode().T[0].drop_duplicates().T.values.tolist()[:100]
+                  results = pd.DataFrame(results).mode().T[0].drop_duplicates().T.values.tolist()
                   result_adds = pd.DataFrame(result_adds).mode().T[0].drop_duplicates().T.values.tolist()[:100]
                   ans_dic[q["KEDCD"]]["Result"] = results
                   ans_dic[q["KEDCD"]]["Results"] = result_adds
-  
 
-     
-              #display(ans_dic)
         with open(f"{size}dim_{class_name}_{self.name}_{topk}nn1.json", "w") as json_file:
             json.dump(ans_dic, json_file)
 
@@ -288,7 +275,3 @@ class Item2Vec:
         self.get_i2v(total=self.total, min_count=self.min_count, size=self.size,class_name=class_name, negative=self.negative,window=self.window, sg=self.sg,trained=True)
         self.get_c2v(self.train_data,self.pre_test, self.i2v_model,self.size,trained=True)
         self.get_result(c2v_model=self.c2v_model, i2v_model=self.i2v_model, item_dic=self.item_dic, test=self.pre_test, topk=topk, size=self.size, class_name=class_name,keyword=False)
-if __name__ == "__main__":
-    FILE_PATH = './'
-    I2V = Item2Vec("val",64,FILE_PATH)
-    I2V.run(class_name="세세분류",topk=5)
